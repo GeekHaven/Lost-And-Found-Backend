@@ -16,10 +16,20 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 
+from django.conf import settings
+from django.conf.urls.static import static
+
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('lost/', include("lost.urls")),
     path('found/', include("found.urls")),
+    path('tag/', include("tag.urls")),
     path('feedback/', include("feedback.urls")),
     path("", include("helpers.urls"))
 ]
+
+# Serve these files using Apache/Nginx in production
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL,
+                          document_root=settings.MEDIA_ROOT[0])

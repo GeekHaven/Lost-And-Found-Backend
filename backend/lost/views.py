@@ -1,8 +1,11 @@
+from django.db.models import Q
 from django.http import JsonResponse
 from django.core.paginator import Paginator
 from django import forms
+from django.contrib.postgres.aggregates import ArrayAgg
 
 from .models import Lost
+from tag.models import Tag
 
 
 class NewItemForm(forms.Form):
@@ -13,6 +16,7 @@ class NewItemForm(forms.Form):
     contactEmail = forms.EmailField(required=False)
     contactPhone = forms.CharField(max_length=10)
     image = forms.URLField(max_length=300, required=False)
+    tagIds = forms.CharField(max_length=300, required=False, strip=True)
 
 
 selectedCols = [
@@ -27,28 +31,32 @@ selectedCols = [
     "contactPhone",
     "contactEmail",
     "image",
-    "found"
+    "found",
 ]
 
+
 def latestLost(req):
-    if(req.method != "GET"):
+    if (req.method != "GET"):
         return JsonResponse({"status": False, "error": "Method not allowed"}, status=405)
 
-    page_size = req.GET.get("pagesize") 
+    page_size = req.GET.get("pagesize")
     page_number = req.GET.get("pagenumber")
     order = req.GET.get("order")
     if not page_size:
         page_size = 20
     if not page_number:
         page_number = 1
-    lostitems = Lost.objects.filter(found=False).order_by("created" if order == "ascending" else "-created").values(*selectedCols)
-    paginated = Paginator(list(lostitems), page_size)
+    lostitems = Lost.objects.filter(found=False).values(
+        *selectedCols).order_by("created" if order == "ascending" else "-created", "id").annotate(tag=ArrayAgg("tag__id"))
+    # .values(*selectedCols)
+    paginated = Paginator(lostitems, page_size)
     curr_page = paginated.get_page(page_number)
-    
+
     res = {
         "status": True,
         "class": "lost",
-        "data": curr_page.object_list,
+        # "data": list(map(lambda lostitem: models.model_to_dict(lostitem).update({"tags": lostitem.tag.all()}), curr_page.object_list)),
+        "data": list(curr_page.object_list),
         "page_size": len(curr_page.object_list),
         "has_next_page": curr_page.has_next(),
         "next_page_number": curr_page.next_page_number() if curr_page.number < paginated.num_pages else False,
@@ -57,7 +65,7 @@ def latestLost(req):
     }
 
     return JsonResponse(res)
-    
+
 
 def getItem(req, id):
     """
@@ -66,7 +74,8 @@ def getItem(req, id):
     if req.method != "GET":
         return JsonResponse({"status": False, "error": "Method not allowed"}, status=405)
 
-    item = Lost.objects.filter(id__exact=id).values(*selectedCols).first()
+    item = Lost.objects.filter(id__exact=id).values(
+        *selectedCols).annotate(tag=ArrayAgg("tag__id")).first()
     if item == None:
         return JsonResponse({"status": False, "error": "Item not found"}, status=404)
     return JsonResponse({
@@ -85,25 +94,28 @@ def newItem(req):
     form = NewItemForm(req.jsonbody(req))
     if form.is_valid():
         newLost = Lost.objects.create(
-            user_id = req.auth_user["uid"],
-            user_name = req.auth_user["name"],
-            title = form.cleaned_data["title"],
-            description = form.cleaned_data["description"],
-            location = form.cleaned_data["location"],
-            lostDate = form.cleaned_data["lostDate"],
-            contactEmail = form.cleaned_data["contactEmail"],
-            contactPhone = form.cleaned_data["contactPhone"],
-            image = form.cleaned_data["image"],
+            user_id=req.auth_user["uid"],
+            user_name=req.auth_user["name"],
+            title=form.cleaned_data["title"],
+            description=form.cleaned_data["description"],
+            location=form.cleaned_data["location"],
+            lostDate=form.cleaned_data["lostDate"],
+            contactEmail=form.cleaned_data["contactEmail"],
+            contactPhone=form.cleaned_data["contactPhone"],
+            image=form.cleaned_data["image"],
         )
-
+        tagsIdArray = form.cleaned_data["tagIds"].split(";")
+        tags = Tag.objects.filter(id__in=tagsIdArray).all() or []
+        newLost.tag.set(list(tags))
         return JsonResponse({
             "status": True,
             "class": "lost",
-            "data":{
+            "data": {
                 "itemId": newLost.id
             }
-        }, status = 201)
-    return JsonResponse({"status": False, "error":"Invalid Form Data"}, status=400)
+        }, status=201)
+    return JsonResponse({"status": False, "error": "Invalid Form Data"}, status=400)
+
 
 def markFound(req):
     if not req.authenticated:
@@ -111,7 +123,8 @@ def markFound(req):
     if req.method != "POST":
         return JsonResponse({"status": False, "error": "Method not allowed"}, status=405)
 
-    lostitem = Lost.objects.filter(id = req.jsonbody(req).get("id"), user_id = req.auth_user["uid"]).first()
+    lostitem = Lost.objects.filter(id=req.jsonbody(req).get(
+        "id"), user_id=req.auth_user["uid"]).first()
     if not lostitem:
         return JsonResponse({"status": False, "error": "Item not found"}, status=404)
 
@@ -122,41 +135,46 @@ def markFound(req):
         "status": True
     })
 
-#to get all item from a user 
-def getItemOfUser(req , user_id):
+# to get all item from a user
+
+
+def getItemOfUser(req, user_id):
     """
     URI looks like: /lost/user/<user_id>
     """
     if req.method != "GET":
         return JsonResponse({"status": False, "error": "Method not allowed"}, status=405)
-    item = list(Lost.objects.filter(user_id__iexact = user_id) .all().values(*selectedCols))
-    if item == None or len(item)==0:
+    item = list(Lost.objects.filter(
+        user_id__iexact=user_id) .all().order_by("-created").values(*selectedCols).annotate(tag=ArrayAgg("tag__id")))
+    if item == None or len(item) == 0:
         return JsonResponse({"status": False, "error": "Items doesnt exist"}, status=404)
     return JsonResponse({
         "status": True,
         "data": item
     })
 
-def getItemsByTag(req,tag_id):
+
+def getItemsByTag(req, tag_id):
     """
     URI looks like: /found/tag/<tag_id>
     """
     if req.method != "GET":
         return JsonResponse({"status": False, "error": "Method not allowed"}, status=405)
-    page_size = req.GET.get("pagesize") 
+    page_size = req.GET.get("pagesize")
     page_number = req.GET.get("pagenumber")
     if not page_size:
         page_size = 20
     if not page_number:
         page_number = 1
-    lostitems = Lost.objects.filter(ownerFound=False, tag__id__exact=tag_id).order_by("-created").values(*selectedCols)
+    lostitems = Lost.objects.filter(found=False, tag__id__exact=tag_id).order_by(
+        "-created").values(*selectedCols).annotate(tag=ArrayAgg("tag__id"))
     paginated = Paginator(list(lostitems), page_size)
     curr_page = paginated.get_page(page_number)
-    
+
     res = {
         "status": True,
         "class": "lost",
-        "data": curr_page.object_list,
+        "data": list(curr_page.object_list),
         "page_size": len(curr_page.object_list),
         "has_next_page": curr_page.has_next(),
         "next_page_number": curr_page.next_page_number() if curr_page.number < paginated.num_pages else False,
@@ -165,11 +183,11 @@ def getItemsByTag(req,tag_id):
     }
     return JsonResponse(res)
 
-from django.db.models import Q
+
 def searchItem(req):
     if req.method != "GET":
         return JsonResponse({"status": False, "error": "Method not allowed"}, status=405)
-    page_size = req.GET.get("pagesize") 
+    page_size = req.GET.get("pagesize")
     page_number = req.GET.get("pagenumber")
     if not page_size:
         page_size = 20
@@ -179,11 +197,11 @@ def searchItem(req):
     if not query:
         return JsonResponse({"status": False, "error": "Invalid Search Query"}, status=400)
     results = Lost.objects.filter(
-            Q(title__icontains=query) | Q(description__icontains=query)
-        ).order_by("-created").values(*selectedCols)
+        Q(title__icontains=query) | Q(description__icontains=query)
+    ).order_by("-created").values(*selectedCols).annotate(tag=ArrayAgg("tag__id"))
     paginated = Paginator(list(results), page_size)
     curr_page = paginated.get_page(page_number)
-    
+
     res = {
         "status": True,
         "class": "lost",
@@ -197,11 +215,12 @@ def searchItem(req):
     return JsonResponse(res)
 
 
-__all__=[
+__all__ = [
     "latestLost",
     "getItem",
     "newItem",
     "markFound",
     "getItemOfUser",
-    "searchItem"
+    "searchItem",
+    "getItemsByTag"
 ]

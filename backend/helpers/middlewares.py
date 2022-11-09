@@ -12,6 +12,7 @@ load_dotenv()
 tokenHandler = jwt
 JWT_SECRET = os.environ.get("JWT_SECRET")
 
+
 class BasicMiddleware:
     """
     request.auth_user = user || None,
@@ -21,11 +22,14 @@ class BasicMiddleware:
     also adds req.unauthorisedResponse for unauthenticated ROutes error Response
     JWT secret is provided in the HTTP Request Headers under the key "secret"
     """
+
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        request.unauthorisedResponse = JsonResponse({"error":"User authentication required"}, status=401)
+        request.unauthorisedResponse = JsonResponse(
+            {"error": "User authentication required"}, status=401)
+
         def bodytojson(request):
             body_unicode = request.body.decode('utf-8')
             try:
@@ -37,10 +41,11 @@ class BasicMiddleware:
             secret = request.headers["Authorization"]
         except KeyError:
             secret = None
-        if (secret and secret!=""):
+        if (secret and secret != ""):
             try:
-                message = tokenHandler.decode(secret, JWT_SECRET, algorithms="HS256")
-                if (datetime.fromisoformat(message["expireon"]) > datetime.now()) :
+                message = tokenHandler.decode(
+                    secret, JWT_SECRET, algorithms="HS256")
+                if (datetime.fromisoformat(message["expireon"]) > datetime.now()):
                     request.auth_user = {
                         "uid": message["uid"],
                         "name": message["name"]
@@ -51,10 +56,9 @@ class BasicMiddleware:
                     request.authenticated = False
             except Exception:
                 request.auth_user = None
-                request.authenticated = False     
+                request.authenticated = False
         else:
             request.auth_user = None
             request.authenticated = False
         response = self.get_response(request)
-        print(response)
         return response

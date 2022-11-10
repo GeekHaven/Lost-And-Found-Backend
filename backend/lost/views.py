@@ -42,13 +42,27 @@ def latestLost(req):
     page_size = req.GET.get("pagesize")
     page_number = req.GET.get("pagenumber")
     order = req.GET.get("order")
+    query = req.GET.get("q")
+    tag_id = req.GET.get("tag")
+
     if not page_size:
         page_size = 20
     if not page_number:
         page_number = 1
-    lostitems = Lost.objects.filter(found=False).values(
-        *selectedCols).order_by("created" if order == "ascending" else "-created", "id").annotate(tag=ArrayAgg("tag__id"))
-    # .values(*selectedCols)
+
+    lostitemsquery = Lost.objects.filter(found=False)
+
+    if query:
+        lostitemsquery = lostitemsquery.filter(Q(title__icontains=query) | Q(
+            description__icontains=query) | Q(location__icontains=query))
+
+    if tag_id:
+        tag_id = tag_id.split(";")
+        lostitemsquery = lostitemsquery.filter(tag__id__in=tag_id)
+
+    lostitems = lostitemsquery.order_by(
+        "created" if order == "ascending" else "-created").values(*selectedCols).annotate(tag=ArrayAgg("tag__id"))
+
     paginated = Paginator(lostitems, page_size)
     curr_page = paginated.get_page(page_number)
 

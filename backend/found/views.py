@@ -42,11 +42,25 @@ def latestFound(req):
     page_size = req.GET.get("pagesize")
     page_number = req.GET.get("pagenumber")
     order = req.GET.get("order")
+    query = req.GET.get("q")
+    tag_id = req.GET.get("tag")
+
     if not page_size:
         page_size = 20
     if not page_number:
         page_number = 1
-    founditems = Found.objects.filter(ownerFound=False).order_by(
+
+    founditemsquery = Found.objects.filter(ownerFound=False)
+
+    if query:
+        founditemsquery = founditemsquery.filter(Q(title__icontains=query) | Q(
+            description__icontains=query) | Q(location__icontains=query))
+
+    if tag_id:
+        tag_id = tag_id.split(";")
+        founditemsquery = founditemsquery.filter(tag__id__in=tag_id)
+
+    founditems = founditemsquery.order_by(
         "created" if order == "ascending" else "-created").values(*selectedCols).annotate(tag=ArrayAgg("tag__id"))
     paginated = Paginator(list(founditems), page_size)
     curr_page = paginated.get_page(page_number)
@@ -187,17 +201,36 @@ def searchItem(req):
         return JsonResponse({"status": False, "error": "Method not allowed"}, status=405)
     page_size = req.GET.get("pagesize")
     page_number = req.GET.get("pagenumber")
+    order = req.GET.get("order")
+
     if not page_size:
         page_size = 20
     if not page_number:
         page_number = 1
     query = req.GET.get("q")
-    if not query:
+    tag_id = req.GET.get("tag").split(";")
+
+    if not query and not tag_id:
         return JsonResponse({"status": False, "error": "Invalid Search Query"}, status=400)
-    results = Found.objects.filter(
-        Q(title__icontains=query) | Q(description__icontains=query)
-    ).order_by("-created").values(*selectedCols).annotate(tag=ArrayAgg("tag__id"))
-    paginated = Paginator(list(results), page_size)
+
+    filter = {
+        "ownerFound": False,
+        "tag__id__in": tag_id,
+    }
+    if query:
+        results = Found.objects.filter(
+            Q(title__icontains=query) | Q(description__icontains=query)
+        )
+    else:
+        results = Found.objects
+
+    if tag_id:
+        results = results.filter(tag__id__in=tag_id)
+
+    founditems = results.filter(**filter).order_by(
+        "created" if order == "ascending" else "-created").values(*selectedCols).annotate(tag=ArrayAgg("tag__id"))
+
+    paginated = Paginator(list(founditems), page_size)
     curr_page = paginated.get_page(page_number)
 
     res = {
